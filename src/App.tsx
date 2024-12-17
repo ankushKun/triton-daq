@@ -1,7 +1,33 @@
 import { useEffect, useState } from 'react';
 import SmoothieComponent, { SmoothieComponentSeries, TimeSeries } from 'react-smoothie';
 import { buildStyles, CircularProgressbarWithChildren } from 'react-circular-progressbar';
+import mqtt from 'mqtt';
 import 'react-circular-progressbar/dist/styles.css';
+
+// example cli command to send a message
+// mosquitto_pub -h test.mosquitto.org -t triton -m "<SAMPLE DATA>"
+// write the equivalent code in the microcontroller to send JSON formatted string data to the MQTT server
+
+// sample code for getting data from MQTT server
+// connect to mosquitto test server
+const client = mqtt.connect({
+  // clientId: 'triton',
+  host: 'test.mosquitto.org',
+  port: 8081,
+  protocol: 'wss'
+});
+client.on('connect', () => {
+  console.log('connected');
+  client.subscribe('triton', (err, g, p) => {
+    console.log(err, g, p);
+  });
+})
+client.on('message', function (topic, message) {
+  // message is Buffer
+  const msg = message.toString();
+  console.log(msg);
+  // use this msg string to get whatever data that was sent, use JSON.parse if it was sent as a JSON string and get the values, then plot it
+})
 
 function XYGraph(props: { title: string, height?: number, xLabel: string, yLabel: string, series: SmoothieComponentSeries[], val: number, setVal: React.Dispatch<React.SetStateAction<any>> }) {
   useEffect(() => {
