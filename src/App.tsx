@@ -1,38 +1,72 @@
-import { useEffect, useState } from 'react';
-import SmoothieComponent, { SmoothieComponentSeries, TimeSeries } from 'react-smoothie';
+import { useEffect, useState, useRef } from 'react';
+import SmoothieComponent, { TimeSeries } from 'react-smoothie';
 import { buildStyles, CircularProgressbarWithChildren } from 'react-circular-progressbar';
-import mqtt from 'mqtt';
+// import mqtt from 'mqtt';
 import 'react-circular-progressbar/dist/styles.css';
-import { hide } from '@tauri-apps/api/app';
+// import { hide } from '@tauri-apps/api/app';
 
-const client = mqtt.connect({
-  host: 'test.mosquitto.org',
-  port: 8081,
-  protocol: 'wss'
-});
-client.on('connect', () => {
-  console.log('connected');
-  client.subscribe('triton', (err, g, p) => {
-    console.log(err, g, p);
-  });
-});
-client.on('message', function (topic, message) {
-  const msg = message.toString();
-  console.log(msg);
-});
+
+const server = 'ws://94.136.191.183:8080';
+
+type Data = {
+  pressureTank: number;
+  fuel: number;
+  oxidiser: number;
+  pressure1: number;
+  pressure2: number;
+  pressure3: number;
+  thrust: number;
+  motor1: number;
+  motor2: number;
+  motor3: number;
+}
+
+function strToObj(str: string): Data {
+  const nums = str.split(',').map(Number);
+
+  return {
+    pressureTank: nums[0],
+    fuel: nums[1],
+    oxidiser: nums[2],
+    pressure1: nums[3],
+    pressure2: nums[4],
+    pressure3: nums[5],
+    thrust: nums[6],
+    motor1: nums[7],
+    motor2: nums[8],
+    motor3: nums[9],
+  }
+}
+// console.log(strToObj("96.1,109.6,99.4,91.8,107.1,101.8,5.0,223.0,207.0,347.0"))
+
+// const client = mqtt.connect({
+//   host: 'test.mosquitto.org',
+//   port: 8081,
+//   protocol: 'wss'
+// });
+// client.on('connect', () => {
+//   console.log('connected');
+//   client.subscribe('triton', (err, g, p) => {
+//     console.log(err, g, p);
+//   });
+// });
+// client.on('message', function (topic, message) {
+//   const msg = message.toString();
+//   console.log(msg);
+// });
 
 function XYGraph(props: any) {
-  useEffect(() => {
-    const interval = setInterval(() => {
-      const data = (props.series[0].data).data;
-      props.series[0].data.append(
-        new Date().getTime(),
-        data.length > 0 ? data[data.length - 1][1] + (Math.random() - 0.5) * 0.1 : 0
-      );
-      props.setVal(data.length > 0 ? data[data.length - 1][1] : 0);
-    }, 500);
-    return () => clearInterval(interval);
-  }, []);
+  // useEffect(() => {
+  //   const interval = setInterval(() => {
+  //     const data = (props.series[0].data).data;
+  //     props.series[0].data.append(
+  //       new Date().getTime(),
+  //       data.length > 0 ? data[data.length - 1][1] + (Math.random() - 0.5) * 0.1 : 0
+  //     );
+  //     props.setVal(data.length > 0 ? data[data.length - 1][1] : 0);
+  //   }, 500);
+  //   return () => clearInterval(interval);
+  // }, []);
 
   return (
     <div className={'flex items-center w-full justify-center bg-black/20 p-1 border border-white/20 rounded-lg ' + props.className}>
@@ -60,6 +94,10 @@ const pressure1 = new TimeSeries({});
 const pressure2 = new TimeSeries({});
 const pressure3 = new TimeSeries({});
 const thrust = new TimeSeries({});
+const motor1 = new TimeSeries({});
+const motor2 = new TimeSeries({});
+const motor3 = new TimeSeries({});
+
 
 function App() {
   const [pressurentVal, setPressurentVal] = useState(0);
@@ -70,23 +108,186 @@ function App() {
   const [pressure3Val, setPressure3Val] = useState(0);
   const [thrustVal, setThrustVal] = useState(0);
   const [motorPerc, setMotorPerc] = useState(50);
+  const [connectionStatus, setConnectionStatus] = useState('Disconnected');
+  const [packetsReceived, setPacketsReceived] = useState(0);
+  const [avgLatency, setAvgLatency] = useState(0);
+  const totalLatencyRef = useRef(0);
+  const channelRef = useRef<RTCDataChannel | null>(null);
+  const pcRef = useRef<RTCPeerConnection | null>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const [lastDataTS, setLastDataTS] = useState(0);
+  const [data, setData] = useState<Data>({
+    pressureTank: 0,
+    fuel: 0,
+    oxidiser: 0,
+    pressure1: 0,
+    pressure2: 0,
+    pressure3: 0,
+    thrust: 0,
+    motor1: 0,
+    motor2: 0,
+    motor3: 0,
+  });
+
+  // useEffect(() => {
+  //   const interval = setInterval(() => {
+  //     let v = parseInt(`${motorPerc + (Math.random() - 0.1) * 5}`);
+  //     if (v < 0) v = 10;
+  //     if (v > 100) v = 90;
+  //     setMotorPerc(v);
+  //   }, 500);
+  //   return () => clearInterval(interval);
+  // }, []);
 
   useEffect(() => {
-    const interval = setInterval(() => {
-      let v = parseInt(`${motorPerc + (Math.random() - 0.1) * 5}`);
-      if (v < 0) v = 10;
-      if (v > 100) v = 90;
-      setMotorPerc(v);
-    }, 500);
-    return () => clearInterval(interval);
-  }, []);
+    // Configure WebRTC
+    const pc = new RTCPeerConnection({
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' }
+      ]
+    });
+    pcRef.current = pc;
+
+    // Create data channel
+    const channel = pc.createDataChannel('sensorData', {
+      ordered: false,
+      maxRetransmits: 0
+    });
+    channelRef.current = channel;
+
+    channel.onopen = () => {
+      console.log('Data channel opened');
+      setConnectionStatus('Connected');
+    };
+
+    // channel.onmessage = (event) => {
+    //   const timestamp = performance.now();
+    //   const [temperature, humidity] = event.data.split(',');
+
+    //   // Update statistics
+    //   setPacketsReceived(prev => prev + 1);
+    //   const latency = timestamp % 100; // Simplified latency calculation
+    //   totalLatencyRef.current += latency;
+    //   setAvgLatency(totalLatencyRef.current / packetsReceived);
+    //   setLastDataTS(timestamp);
+    //   console.log(timestamp);
+    //   // Here you can update your graph data
+    //   // For example:
+    //   pressurent.append(new Date().getTime(), parseFloat(temperature));
+    //   fuel.append(new Date().getTime(), parseFloat(humidity));
+    // };
+
+    channel.onerror = (error) => {
+      console.error('Channel Error:', error);
+      setConnectionStatus('Error');
+    };
+
+    // Connect to signaling server
+    const ws = new WebSocket(server);
+    wsRef.current = ws;
+
+    ws.onopen = async () => {
+      console.log('Connected to signaling server');
+      // Create and send offer
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      ws.send(JSON.stringify({ type: 'offer', sdp: offer }));
+    };
+
+    ws.onmessage = async (event) => {
+      const msg = JSON.parse(event.data);
+      // console.log(msg);
+      setConnectionStatus(msg.type == "data" ? "Data Incoming" : "Disconnected");
+      setData(strToObj(msg.data));
+      const timestamp = performance.now();
+      setLastDataTS(timestamp);
+      const latency = timestamp - msg.timestamp; // todo: update with real timestamp
+      console.log(latency);
+      totalLatencyRef.current += latency;
+      setAvgLatency(totalLatencyRef.current / packetsReceived);
+      setPacketsReceived(prev => prev + 1);
+
+
+      // if (msg.type === 'answer') {
+      // await pc.setRemoteDescription(new RTCSessionDescription(msg));
+      // } else if (msg.type === 'ice-candidate') {
+      // await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+      // }
+    };
+
+    ws.onerror = (error) => {
+      console.log('WebSocket Error:', error);
+      setConnectionStatus('Error');
+    };
+
+    // Handle ICE candidates
+    pc.onicecandidate = (event) => {
+      if (event.candidate && wsRef.current) {
+        wsRef.current.send(JSON.stringify({
+          type: 'ice-candidate',
+          candidate: event.candidate
+        }));
+      }
+    };
+
+    pc.onconnectionstatechange = () => {
+      setConnectionStatus(pc.connectionState);
+    };
+
+    // Cleanup function
+    return () => {
+      channel.close();
+      pc.close();
+      ws.close();
+    };
+  }, []); // Empty dependency array means this runs once on mount
+
+  useEffect(() => {
+    const checkDataTimeout = setInterval(() => {
+      const now = performance.now();
+      const timeSinceLastData = now - lastDataTS;
+
+      if (lastDataTS !== 0 && timeSinceLastData > 5000) {  // 5000ms = 5 seconds
+        setConnectionStatus('Waiting');
+      }
+    }, 1000);  // Check every second
+
+    return () => clearInterval(checkDataTimeout);
+  }, [lastDataTS]);
+
+  useEffect(() => {
+    console.dir(data);
+    pressurent.append(new Date().getTime(), data.pressureTank);
+    fuel.append(new Date().getTime(), data.fuel);
+    oxidiser.append(new Date().getTime(), data.oxidiser);
+    pressure1.append(new Date().getTime(), data.pressure1);
+    pressure2.append(new Date().getTime(), data.pressure2);
+    pressure3.append(new Date().getTime(), data.pressure3);
+    thrust.append(new Date().getTime(), data.thrust);
+    motor1.append(new Date().getTime(), data.motor1);
+    motor2.append(new Date().getTime(), data.motor2);
+    motor3.append(new Date().getTime(), data.motor3);
+  }, [data]);
 
   return (
     <div className='flex flex-col items-center justify-around h-screen'>
 
       <div className="flex justify-between items-center text-white h-full p-2 px-10 max-h-[10vh] w-full">
         <img src="/public/Triton_Rocketry.png" alt="Tritan Logo Left" className='h-full p-2' />
-        <div className="text-4xl font-bold tracking-wider font-sans">GROUND CONTROL STATION</div>
+        <div className="flex flex-col items-center">
+          <div className="text-4xl font-bold tracking-wider font-sans">GROUND CONTROL STATION</div>
+          <div className={`text-sm ${connectionStatus === 'Data Incoming'
+            ? 'text-green-500'
+            : connectionStatus === 'Waiting'
+              ? 'text-yellow-500'
+              : 'text-red-500'
+            }`}>
+            Status: {connectionStatus}
+          </div>
+          <div className="text-xs">
+            Packets: {packetsReceived} | Latency: {avgLatency.toFixed(2)}ms
+          </div>
+        </div>
         <img src="Kalpana Chawla center logo.png" alt="Kalpana Chawala Center Logo" className='h-full' />
       </div>
 
@@ -98,7 +299,7 @@ function App() {
           <div className="w-1/2 grid grid-cols-3 grid-rows-2 gap-2">
             <XYGraph
               title="Pressure Tank"
-              val={pressurentVal}
+              val={data.pressureTank}
               setVal={setPressurentVal}
               xLabel="Time"
               yLabel="Pressure"
@@ -114,7 +315,7 @@ function App() {
             />
             <XYGraph
               title="Fuel Tank"
-              val={fuelVal}
+              val={data.fuel}
               setVal={setFuelVal}
               xLabel="Time"
               yLabel="Pressure"
@@ -130,7 +331,7 @@ function App() {
             />
             <XYGraph
               title="Oxidiser"
-              val={oxidiserVal}
+              val={data.oxidiser}
               setVal={setOxidiserVal}
               xLabel="Time"
               yLabel="Pressure"
@@ -146,7 +347,7 @@ function App() {
             />
             <XYGraph
               title="Pressure 1"
-              val={pressure1Val}
+              val={data.pressure1}
               setVal={setPressure1Val}
               xLabel="Time"
               yLabel="Pressure"
@@ -162,7 +363,7 @@ function App() {
             />
             <XYGraph
               title="Pressure 2"
-              val={pressure2Val}
+              val={data.pressure2}
               setVal={setPressure2Val}
               xLabel="Time"
               yLabel="Pressure"
@@ -178,7 +379,7 @@ function App() {
             />
             <XYGraph
               title="Pressure 3"
-              val={pressure3Val}
+              val={data.pressure3}
               setVal={setPressure3Val}
               xLabel="Time"
               yLabel="Pressure"
@@ -198,7 +399,7 @@ function App() {
               <XYGraph
                 title="Thrust"
                 className='h-full w-full'
-                val={thrustVal}
+                val={data.thrust}
                 setVal={setThrustVal}
                 width="100%" // Makes the graph take the full width of the container
                 height={330} // Makes the graph take the full height of the container
@@ -220,7 +421,7 @@ function App() {
         {/* Motor Circular Graphs */}
         <div className="flex gap-5 justify-around mt-4">
           <div className='flex gap-5'>
-            {[motorPerc, motorPerc + 10, motorPerc - 10, motorPerc + 15, motorPerc - 5].map(
+            {[data.motor1, data.motor2, data.motor3].map(
               (percentage, index) => (
                 <CircularProgressbarWithChildren
                   key={index}
