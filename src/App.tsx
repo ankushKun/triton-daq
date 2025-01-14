@@ -276,7 +276,7 @@ function App() {
     <div className='flex flex-col items-center justify-around h-screen'>
 
       <div className="flex justify-between items-center text-white h-full p-2 px-10 max-h-[10vh] w-full">
-        <img src="/public/Triton_Rocketry.png" alt="Tritan Logo Left" className='h-full p-2' />
+        <img src="/Triton_Rocketry.png" alt="Tritan Logo Left" className='h-full p-2' />
         <div className="flex flex-col items-center">
           <div className="text-4xl font-bold tracking-wider font-sans">GROUND CONTROL STATION</div>
           <div className={`text-sm ${connectionStatus === 'Data Incoming'
