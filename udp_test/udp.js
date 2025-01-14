@@ -1,5 +1,6 @@
 const WebSocket = require('ws');
 const dgram = require('dgram');
+const fs = require('fs');
 
 // Create WebSocket server for signaling
 const wss = new WebSocket.Server({ port: 8080 });
@@ -10,12 +11,25 @@ let webClients = new Set();
 let espClient = null;
 let messageCounter = 0;
 
+// Add this line after the messageCounter initialization
+const csvFile = 'udp_messages.csv';
+
+// Initialize CSV file with headers if it doesn't exist
+if (!fs.existsSync(csvFile)) {
+    fs.writeFileSync(csvFile, '\n');
+}
+
 // Handle UDP messages from ESP32
 udpServer.on('message', (msg, rinfo) => {
     messageCounter++;
     console.log(`[UDP] Received from ${rinfo.address}:${rinfo.port}: ${msg.toString()}`);
     console.log(`[UDP] Message #${messageCounter}`);
-    
+
+    // Append message to CSV file
+    const timestamp = new Date().toISOString();
+    const csvLine = `${timestamp},${messageCounter},${msg.toString()}\n`;
+    fs.appendFileSync(csvFile, csvLine);
+
     espClient = rinfo;
     // Forward data to all connected web clients
     let forwardedCount = 0;
@@ -42,11 +56,11 @@ wss.on('connection', (ws, req) => {
     console.log(`[WS] New connection from ${req.socket.remoteAddress}`);
     webClients.add(ws);
     console.log(`[WS] Total connected clients: ${webClients.size}`);
-    
+
     ws.on('message', (message) => {
         const msg = JSON.parse(message);
         console.log(`[WS] Received message type: ${msg.type}`);
-        
+
         if (msg.type === 'offer') {
             console.log('[WS] Received WebRTC offer');
             // Store data channel info
@@ -58,7 +72,7 @@ wss.on('connection', (ws, req) => {
                     }));
                 }
             };
-            
+
             // Send back dummy answer
             ws.send(JSON.stringify({
                 type: 'answer',
@@ -70,12 +84,12 @@ wss.on('connection', (ws, req) => {
             console.log('[WS] Sent WebRTC answer');
         }
     });
-    
+
     ws.on('close', () => {
         webClients.delete(ws);
         console.log(`[WS] Client disconnected. Remaining clients: ${webClients.size}`);
     });
-    
+
     ws.on('error', (error) => {
         console.error(`[WS] Client error: ${error}`);
     });
