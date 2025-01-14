@@ -1,0 +1,192 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Real-time Sensor Data</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .dashboard {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        .card {
+            background: #f5f5f5;
+            padding: 20px;
+            border-radius: 8px;
+            text-align: center;
+        }
+        .value {
+            font-size: 2em;
+            font-weight: bold;
+            color: #2196F3;
+        }
+        #stats {
+            margin-top: 20px;
+            font-family: monospace;
+        }
+        #log {
+            margin-top: 20px;
+            padding: 10px;
+            background: #f8f8f8;
+            border: 1px solid #ddd;
+            border-radius: 4px;
+            font-family: monospace;
+            height: 200px;
+            overflow-y: auto;
+        }
+        .log-entry {
+            margin: 5px 0;
+            padding: 2px 5px;
+        }
+        .log-entry.incoming {
+            color: #2196F3;
+        }
+        .log-entry.outgoing {
+            color: #4CAF50;
+        }
+        .log-entry.error {
+            color: #f44336;
+        }
+    </style>
+</head>
+<body>
+    <h1>Real-time Sensor Data</h1>
+    <div class="dashboard">
+        <div class="card">
+            <h2>Temperature</h2>
+            <div id="temperature" class="value">--</div>
+            <div>°C</div>
+        </div>
+        <div class="card">
+            <h2>Humidity</h2>
+            <div id="humidity" class="value">--</div>
+            <div>%</div>
+        </div>
+    </div>
+    <div id="stats">
+        Packets received: <span id="packetsReceived">0</span><br>
+        Average latency: <span id="avgLatency">0</span>ms<br>
+        Lost packets: <span id="lostPackets">0</span>
+    </div>
+    <div id="log"></div>
+
+    <script>
+        let packetsReceived = 0;
+        let totalLatency = 0;
+        let lastPacketId = 0;
+        let lostPackets = 0;
+
+        function addLogEntry(message, type = 'info') {
+            const log = document.getElementById('log');
+            const entry = document.createElement('div');
+            entry.className = `log-entry ${type}`;
+            entry.textContent = `[${new Date().toISOString().split('T')[1].slice(0, -1)}] ${message}`;
+            log.appendChild(entry);
+            log.scrollTop = log.scrollHeight;
+            
+            // Keep only last 100 messages
+            while (log.children.length > 100) {
+                log.removeChild(log.firstChild);
+            }
+        }
+
+        // Configure WebRTC
+        const pc = new RTCPeerConnection({
+            iceServers: [
+                { urls: 'stun:stun.l.google.com:19302' }
+            ]
+        });
+
+        addLogEntry('WebRTC configuration initialized');
+
+        // Create data channel
+        const channel = pc.createDataChannel('sensorData', {
+            ordered: false,
+            maxRetransmits: 0
+        });
+
+        channel.onopen = () => {
+            addLogEntry('Data channel opened', 'outgoing');
+        };
+
+        channel.onmessage = (event) => {
+            const timestamp = performance.now();
+            console.log(event.data);
+            const [temperature, humidity] = event.data.split(',');
+            
+            // Update dashboard
+            document.getElementById('temperature').textContent = temperature;
+            document.getElementById('humidity').textContent = humidity;
+            
+            // Update statistics
+            packetsReceived++;
+            const latency = timestamp % 100; // Simplified latency calculation
+            totalLatency += latency;
+            
+            document.getElementById('packetsReceived').textContent = packetsReceived;
+            document.getElementById('avgLatency').textContent = 
+                (totalLatency / packetsReceived).toFixed(2);
+            
+            // Log received data
+            addLogEntry(`Received: Temp=${temperature}°C, Humidity=${humidity}%, Latency=${latency.toFixed(2)}ms`, 'incoming');
+        };
+
+        channel.onerror = (error) => {
+            addLogEntry(`Channel Error: ${error.message}`, 'error');
+        };
+
+        // Connect to signaling server
+        const ws = new WebSocket('ws://192.168.220.38:8080');
+
+        ws.onopen = async () => {
+            addLogEntry('Connected to signaling server', 'outgoing');
+            // Create and send offer
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            ws.send(JSON.stringify({ type: 'offer', sdp: offer }));
+            addLogEntry('Sent WebRTC offer', 'outgoing');
+        };
+
+        ws.onmessage = async (event) => {
+            const msg = JSON.parse(event.data);
+            console.log(msg);
+            addLogEntry(`Received signaling message: ${msg.data}`, 'incoming');
+            
+            if (msg.type === 'answer') {
+                await pc.setRemoteDescription(new RTCSessionDescription(msg));
+                addLogEntry('Set remote description', 'incoming');
+            } else if (msg.type === 'ice-candidate') {
+                await pc.addIceCandidate(new RTCIceCandidate(msg.candidate));
+                addLogEntry('Added ICE candidate', 'incoming');
+            }
+        };
+
+        ws.onerror = (error) => {
+            addLogEntry(`WebSocket Error: ${error.message}`, 'error');
+        };
+
+        // Handle ICE candidates
+        pc.onicecandidate = (event) => {
+            if (event.candidate) {
+                ws.send(JSON.stringify({
+                    type: 'ice-candidate',
+                    candidate: event.candidate
+                }));
+                addLogEntry('Sent ICE candidate', 'outgoing');
+            }
+        };
+
+        pc.onconnectionstatechange = () => {
+            addLogEntry(`WebRTC connection state: ${pc.connectionState}`);
+        };
+    </script>
+</body>
+</html>
