@@ -6,7 +6,8 @@ import 'react-circular-progressbar/dist/styles.css';
 // import { hide } from '@tauri-apps/api/app';
 
 
-const server = 'ws://94.136.191.183:8080';
+
+const server = '94.136.191.183:8080';
 
 type Data = {
   pressureTank: number;
@@ -183,7 +184,9 @@ function App() {
     };
 
     // Connect to signaling server
-    const ws = new WebSocket(server);
+    // if browser url has https, change to wss
+    const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${protocol}://${server}`);
     wsRef.current = ws;
 
     ws.onopen = async () => {
